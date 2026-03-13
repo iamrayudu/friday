@@ -1,0 +1,678 @@
+FRIDAY — CONVERSATION FLOW
+===========================
+Two flows: CHAT (ask Friday) and TEACH (add knowledge to Friday).
+Both start in the browser at http://localhost:8000
+
+─────────────────────────────────────────────────────────────────────────────
+OVERVIEW
+─────────────────────────────────────────────────────────────────────────────
+
+CHAT FLOW (right tab):
+  User asks a question
+    → POST /chat → Friday Agent (LangChain) → decides which tools to call
+      → tools query ChromaDB → Gemini generates response grounded in retrieved chunks
+        → response + tool call log sent back → shown in browser
+
+TEACH FLOW (left tab):
+  User pastes content
+    → POST /ingest → Ingestion Agent (Gemini structured output) → chunks by concept
+      → decides collection + metadata for each chunk → upserts to ChromaDB
+        → stored chunks summary sent back → shown in browser
+
+─────────────────────────────────────────────────────────────────────────────
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CHAT FLOW — STEP BY STEP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+─────────────────────────────────────────────────────────────────────────────
+STEP 1 — Browser sends the request
+─────────────────────────────────────────────────────────────────────────────
+
+File: templates/index.html (JavaScript, Chat tab)
+
+When the user hits Send:
+  - JS collects the message text
+  - JS builds the "history" array — all past turns this session, e.g.:
+      [ {role: "user", content: "what is JTBD?"},
+        {role: "model", content: "JTBD stands for..."} ]
+  - JS sends a POST to /chat with JSON body:
+      { "message": "when does JTBD break down?", "history": [...] }
+
+  History is tracked entirely in the browser — the server is stateless.
+  No session storage, no database for chat logs.
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 2 — FastAPI receives and validates the request
+─────────────────────────────────────────────────────────────────────────────
+
+File: main.py → @app.post("/chat")
+
+  - FastAPI's Pydantic model validates the body: {message: str, history: list}
+  - Calls friday_chat(message=..., history=...)
+  - Any agent error returns a 500 JSON response
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 3 — LangChain agent is built
+─────────────────────────────────────────────────────────────────────────────
+
+File: agents/friday_agent.py → _build_executor()
+
+A fresh AgentExecutor is built for each request:
+
+  LLM:
+    Gemini 2.0 Flash, temperature=0.3 (focused but not robotic)
+
+  Prompt structure (in order):
+    1. [system]           ← SYSTEM_PROMPT: who Friday is, how it behaves
+    2. [chat_history]     ← past turns as HumanMessage / AIMessage objects
+    3. [human]            ← current user message
+    4. [agent_scratchpad] ← LangChain fills this with tool results as agent works
+
+  Tools registered:
+    - search_knowledge   → "knowledge" collection (analytical depth, any domain)
+    - search_frameworks  → "frameworks" collection (reusable tools)
+    - get_profile        → "personal" collection (Sudheer's background + his analysis)
+
+  Settings:
+    - max_iterations=5: agent can call at most 5 tools per message
+    - return_intermediate_steps=True: captures tool call log for the UI
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 4 — History is converted to LangChain format
+─────────────────────────────────────────────────────────────────────────────
+
+File: agents/friday_agent.py → chat()
+
+  Frontend format: [{role: "user"|"model", content: "..."}]
+  LangChain format: HumanMessage / AIMessage objects
+
+  role "user"  → HumanMessage(content="...")
+  role "model" → AIMessage(content="...")
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 5 — Agent decides which tools to call (CORE INTELLIGENCE)
+─────────────────────────────────────────────────────────────────────────────
+
+File: agents/friday_agent.py → executor.invoke()
+
+  LangChain sends the full prompt to Gemini.
+  Gemini reads:
+    - The user's question
+    - All @tool docstrings (LangChain passes these to Gemini automatically)
+    - The conversation history
+
+  Gemini decides which tools to call and with what queries.
+
+  Examples:
+    "when does JTBD break down?"
+      → search_knowledge("JTBD limitations stress tests")
+
+    "how do I apply Porter's Five Forces?"
+      → search_frameworks("Porter's Five Forces application steps")
+
+    "given my tech background, which MBA frameworks matter most?"
+      → get_profile() AND search_frameworks("MBA frameworks for tech product")
+        (Gemini chains two tool calls)
+
+    "thanks, that's helpful"
+      → no tools called, answers from conversation context
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 6 — Tool executes: ChromaDB similarity search
+─────────────────────────────────────────────────────────────────────────────
+
+Files: tools/retrieval.py → search_knowledge() / search_frameworks() / get_profile()
+       memory/vector_store.py → get_store()
+
+Each tool:
+  1. Gets (or creates) a cached LangChain Chroma store for the collection
+  2. Calls .similarity_search_with_score(query, k=N)
+     a. Embeds the query using all-MiniLM-L6-v2 → 384-dim vector
+     b. ChromaDB computes cosine distance to all stored vectors
+     c. Returns N closest chunks with their distance scores
+  3. Formats results as readable text for the LLM:
+       [chunk name] relevance: 0.82
+       <chunk content>
+       ---
+       [chunk name] relevance: 0.71
+       <chunk content>
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 7 — Gemini generates the final response
+─────────────────────────────────────────────────────────────────────────────
+
+  After all tool calls complete, Gemini has:
+    - Original question
+    - Full conversation history
+    - Retrieved knowledge chunks (in the agent_scratchpad)
+
+  Gemini synthesizes a response grounded in retrieved content.
+  The SYSTEM_PROMPT says: "Be a thinking partner, not a search engine — synthesize."
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 8 — Response is packaged and returned
+─────────────────────────────────────────────────────────────────────────────
+
+File: agents/friday_agent.py → chat() (bottom)
+
+  From result["intermediate_steps"] — list of (AgentAction, tool_output) pairs:
+    tool_calls = [
+      { "tool": "search_knowledge",
+        "query": "JTBD limitations",
+        "snippet": "first 300 chars of what was found..." },
+      ...
+    ]
+
+  Returns:
+    { "response": "Friday's answer...", "tool_calls": [...] }
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 9 — Browser renders the response
+─────────────────────────────────────────────────────────────────────────────
+
+File: templates/index.html
+
+  Right panel: new message bubble with Friday's answer
+  Left panel: tool call log (tool name, query used, snippet of what was found)
+  JS: appends exchange to history array; next request will include this turn
+
+─────────────────────────────────────────────────────────────────────────────
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TEACH FLOW — STEP BY STEP (12-AGENT PIPELINE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Running example: a 1500-word article on "SaaS Unit Economics" is pasted.
+  This example follows it through all 12 agents from text → ChromaDB.
+
+  PIPELINE MAP (in order):
+    1  Classifier       → classifies content, detects topic + domains
+    2  Context Loader   → fetches what Friday already knows (no LLM)
+    3  Chunker          → splits into standalone concept units
+    4  Enricher         → proposes implications, use cases, follow-up questions
+    5  Critic           → challenges chunks AND proposed enrichments
+    6  Enricher Refiner → refines enrichments after hearing the Critic (dialogue turn 3)
+    7  Academic Extractor → extracts academic structure (claims, authors, theories)
+    8  Connector        → finds related existing chunks by vector similarity (no LLM)
+    9  Relationship Typer → classifies HOW each connection relates (BUILDS_ON / CONTRADICTS / etc.)
+   10  Assembler        → merges all agent outputs into FinalChunks (no LLM)
+   11  Writer           → upserts all FinalChunks to ChromaDB (no LLM)
+   12  Synthesizer      → writes the results summary shown in the UI
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 1 — User pastes content in the Teach tab
+─────────────────────────────────────────────────────────────────────────────
+
+File: templates/index.html (JavaScript, Teach tab)
+
+  Two inputs:
+    - Content textarea: the raw text (article, notes, your analysis, anything)
+    - Hint field (optional): brief context to help the pipeline classify correctly
+        e.g. "this is my own analysis of unit economics for SaaS startups"
+             "MBA operations class notes on supply chain"
+             "lessons from my last product manager role"
+
+  On "Teach Friday" click:
+    - JS sends POST to /ingest: { "content": "...", "hint": "..." }
+    - Results panel shows a processing animation while all 8 agents run
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 2 — FastAPI receives and kicks off the pipeline
+─────────────────────────────────────────────────────────────────────────────
+
+File: main.py → @app.post("/ingest")
+      agents/ingestion_agent.py → process()
+
+  - FastAPI validates: {content: str, hint: str = ""}
+  - Calls ingestion_agent.process(content=..., hint=...)
+  - process() initializes IngestionState with ALL keys pre-populated to defaults
+    (LangGraph requires all TypedDict keys present before the graph runs)
+  - Calls PIPELINE.invoke(state) — this starts the 12-node LangGraph graph
+
+─────────────────────────────────────────────────────────────────────────────
+AGENT 1: CLASSIFIER
+─────────────────────────────────────────────────────────────────────────────
+
+File: agents/pipeline/nodes/classifier.py → run_classifier()
+
+  INPUT  (from state): raw_content, hint
+  OUTPUT (to state):   content_type, domains, is_own_writing, primary_topic, quality_signal
+
+  ONE Gemini call. Uses structured output (ClassifierOutput Pydantic model).
+  temperature=0.1 — precise classification, no creativity needed.
+
+  For our SaaS article:
+    content_type   = "article"
+    domains        = ["finance", "strategy"]
+    is_own_writing = False
+    primary_topic  = "SaaS unit economics"
+    quality_signal = "high"
+
+  These values flow into every subsequent agent to calibrate their behavior.
+  The Chunker uses content_type to decide collection routing.
+  The Critic uses content_type to pick the right critical lens.
+  The Synthesizer uses primary_topic in the final summary.
+
+─────────────────────────────────────────────────────────────────────────────
+AGENT 2: CONTEXT LOADER
+─────────────────────────────────────────────────────────────────────────────
+
+File: agents/pipeline/nodes/context_loader.py → run_context_loader()
+
+  INPUT  (from state): primary_topic, domains
+  OUTPUT (to state):   context_chunks (List[ContextChunk]) — up to 12 existing chunks
+
+  NO LLM CALL. Queries ChromaDB BEFORE any chunking happens.
+
+  Query: f"{primary_topic} {' '.join(domains)}"
+  Searches all three collections (knowledge, frameworks, personal).
+  Keeps: top 4 per collection, score >= 0.50, content truncated to 400 chars.
+  Deduplicates by chunk ID.
+
+  For "SaaS unit economics" (if PMF and JTBD knowledge already in DB):
+    context_chunks = [
+      { id: "km_pmf_growth_metrics_001", collection: "knowledge", score: 0.71,
+        text: "PMF is evidenced by... (first 400 chars)" },
+      { id: "km_jtbd_retention_levers_001", collection: "knowledge", score: 0.68,
+        text: "The job-to-be-done framework..." },
+      ...
+    ]
+
+  WHY: Every downstream agent can see what Friday already knows before generating
+  anything. The Enricher avoids redundant implications. The Critic compares new
+  claims to existing knowledge. The Academic Extractor understands the broader
+  intellectual context. Without this step, agents work in a vacuum.
+
+  First ingest ever (empty DB): context_chunks = [], pipeline continues normally.
+
+─────────────────────────────────────────────────────────────────────────────
+AGENT 3: CHUNKER
+─────────────────────────────────────────────────────────────────────────────
+
+File: agents/pipeline/nodes/chunker.py → run_chunker()
+
+  INPUT  (from state): raw_content, hint, content_type, domains, is_own_writing, primary_topic
+  OUTPUT (to state):   raw_chunks (List[RawChunk])
+
+  ONE Gemini call. Uses structured output (ChunkerOutput Pydantic model).
+  temperature=0.1 — chunking should be deterministic and consistent.
+
+  Splits the article into ONE CONCEPT PER CHUNK. Not by word count or paragraph —
+  by intellectual unit. Each chunk must stand alone without surrounding context.
+
+  For our SaaS article (1500 words → 5 chunks):
+    { id: "km_saas_cac_payback_001",     name: "CAC Payback Period Mechanics",  collection: "knowledge", domain: "finance" }
+    { id: "km_saas_ltv_cac_ratio_001",   name: "LTV:CAC Ratio Benchmarks",     collection: "knowledge", domain: "finance" }
+    { id: "km_saas_nrr_001",             name: "Net Revenue Retention",         collection: "knowledge", domain: "finance" }
+    { id: "km_saas_magic_number_001",    name: "SaaS Magic Number",             collection: "knowledge", domain: "strategy" }
+    { id: "km_saas_burn_multiple_001",   name: "Burn Multiple and Efficiency",  collection: "knowledge", domain: "finance" }
+
+  These raw_chunks are the backbone — every subsequent agent works from this list.
+
+─────────────────────────────────────────────────────────────────────────────
+AGENT 4: ENRICHER
+─────────────────────────────────────────────────────────────────────────────
+
+File: agents/pipeline/nodes/enricher.py → run_enricher()
+
+  INPUT  (from state): raw_chunks, primary_topic, domains, context_chunks
+  OUTPUT (to state):   enrichments (List[Enrichment]) — one per chunk (DRAFT — Refiner will improve these)
+
+  ONE Gemini call covering ALL chunks together.
+  temperature=0.3 — some creativity; implications benefit from varied angles.
+
+  The Enricher is aware of context_chunks: its implications MUST distinguish
+  what's genuinely new vs. what Friday already knows from prior ingests.
+
+  For "km_saas_cac_payback_001":
+    implications: [
+      "Short payback = reinvest revenue into growth faster without needing external capital.",
+      "Payback > 18 months means you must raise more frequently — vulnerable to funding cycles."
+    ]
+    follow_up_questions: [
+      "How does blended CAC (all channels combined) vs. paid-only CAC change the payback calculation?",
+      "At what payback threshold does a SaaS business become self-funding?"
+    ]
+    use_cases: [
+      "Evaluating a SaaS startup's fundraise readiness: payback > 18 months signals capital dependency.",
+      "Consulting diligence on a SaaS acquisition: payback signals how efficiently marketing spend converts to margin."
+    ]
+
+  The enrichment is NOT written to ChromaDB yet — it's held in state as a
+  draft. The Critic (Agent 5) will challenge it; the Enricher Refiner (Agent 6)
+  will overwrite it with a refined version before the Assembler uses it.
+
+─────────────────────────────────────────────────────────────────────────────
+AGENT 5: CRITIC
+─────────────────────────────────────────────────────────────────────────────
+
+File: agents/pipeline/nodes/critic.py → run_critic()
+
+  INPUT  (from state): raw_chunks, enrichments (drafts from Agent 4), primary_topic, content_type, domains, context_chunks
+  OUTPUT (to state):   critiques (List[Critique]) — one per chunk
+
+  ONE Gemini call covering ALL chunks together.
+  temperature=0.3 — critique benefits from varied angles.
+
+  For "km_saas_cac_payback_001":
+    limitations: [
+      "The 12-month benchmark is calibrated for VC-funded SaaS — bootstrapped businesses can tolerate longer payback because growth capital isn't the bottleneck.",
+      "Ignores blended CAC across all channels; using paid-only CAC artificially improves the metric."
+    ]
+    biases: [
+      "Written primarily from a US VC-funded SaaS lens — B2B enterprise vs. SMB payback dynamics are very different.",
+      "Survivorship bias: the benchmarks come from public SaaS companies that succeeded; companies that failed with similar metrics aren't in the data."
+    ]
+    stress_tests: [
+      "What if payback is 8 months but net revenue retention is 70%? Healthy payback doesn't save you if customers churn fast.",
+      "Apply this to a product-led growth company — CAC is near zero for self-serve users. The framework breaks down when distribution is built into the product."
+    ]
+
+  The Critic sees BOTH the raw chunk AND the Enricher's proposed implications,
+  so it can challenge weak enrichment claims as well as the core content.
+
+  The critique is NOT appended to the core chunk. It becomes a SEPARATE
+  companion chunk ("km_saas_cac_payback_001_critique") in the Assembler (Agent 10).
+
+─────────────────────────────────────────────────────────────────────────────
+AGENT 6: ENRICHER REFINER (DIALOGUE TURN 3)
+─────────────────────────────────────────────────────────────────────────────
+
+File: agents/pipeline/nodes/enricher_refiner.py → run_enricher_refiner()
+
+  INPUT  (from state): raw_chunks, enrichments (Agent 4 drafts), critiques (Agent 5),
+                       context_chunks, primary_topic, domains
+  OUTPUT (to state):   enrichments (List[Enrichment]) — OVERWRITES Agent 4's drafts
+
+  ONE Gemini call. temperature=0.4.
+
+  This is the third turn of a 3-turn agent dialogue:
+    Turn 1 (Enricher):         "Here are my proposed implications for each chunk."
+    Turn 2 (Critic):           "Here are my challenges to those claims."
+    Turn 3 (Enricher Refiner): "Given the Critic's pushback, here are my refined implications."
+
+  For "km_saas_cac_payback_001", after the Critic challenged the "SaaS-VC lens" bias:
+    refined implications = [
+      "Short payback = reinvest revenue into growth faster WITHOUT needing external capital —
+       this advantage only exists if payback is truly 12 months, not blended-CAC-adjusted.",
+      "The benchmark varies dramatically by GTM: PLG companies have near-zero CAC so payback
+       is almost meaningless; enterprise sales cycles push payback to 18-24 months structurally."
+    ]
+
+  The refined enrichments are what actually get stored — not Agent 4's original drafts.
+  After this node, state["enrichments"] contains the final, critic-informed version.
+
+─────────────────────────────────────────────────────────────────────────────
+AGENT 7: ACADEMIC EXTRACTOR
+─────────────────────────────────────────────────────────────────────────────
+
+File: agents/pipeline/nodes/academic_extractor.py → run_academic_extractor()
+
+  INPUT  (from state): raw_content (the full original paste), content_type, primary_topic, domains
+  OUTPUT (to state):   academic_analysis (List[AcademicAnalysis]) — 0 or 1 item
+
+  ONE Gemini call. temperature=0.2. Runs on the FULL text, not individual chunks.
+  SKIPPED for "framework_ref" content type (no academic structure to extract).
+
+  Extracts structured academic intelligence from the content as a whole:
+    key_claims:         main empirical or theoretical assertions made
+    key_authors:        researchers, practitioners, or thinkers cited or implied
+    key_theories:       named frameworks, models, or schools of thought referenced
+    research_approach:  how the knowledge was produced (empirical, conceptual, case-based...)
+    debate_position:    where this content sits in an ongoing intellectual debate
+    intellectual_context: broader academic/practitioner context this belongs to
+
+  For our SaaS article:
+    key_claims:   ["Payback < 12 months correlates with strong unit economics",
+                   "NRR above 100% enables negative churn compounding"]
+    key_authors:  ["David Skok (SaaS metrics)", "Bill Gurley (LTV:CAC)"]
+    key_theories: ["SaaS unit economics framework", "cohort analysis methodology"]
+    research_approach: "Practitioner synthesis drawing on public SaaS company data and VC analysis"
+    debate_position:   "Argues for payback period as primary metric over LTV:CAC"
+    intellectual_context: "Modern SaaS financial modeling, post-2010 cloud era"
+
+  This becomes a SINGLE "academic_context" FinalChunk (ak_{topic}_academic_context)
+  assembled by the Assembler (Agent 10) and stored in ChromaDB.
+  Searchable: "what are the theoretical foundations of SaaS unit economics?"
+  → retrieves this chunk directly.
+
+─────────────────────────────────────────────────────────────────────────────
+AGENT 8: CONNECTOR
+─────────────────────────────────────────────────────────────────────────────
+
+File: agents/pipeline/nodes/connector.py → run_connector()
+
+  INPUT  (from state): raw_chunks (uses chunk content for embedding)
+  OUTPUT (to state):   connection_map (List[Connection]) — one per chunk
+
+  NO LLM CALL. Pure vector similarity search against existing ChromaDB.
+
+  For each raw_chunk:
+    1. Embed chunk["content"] → 384-dim vector (all-MiniLM-L6-v2)
+    2. Search "knowledge" collection: top 3 nearest neighbors
+    3. Search "frameworks" collection: top 3 nearest neighbors
+    4. Keep only results with score >= 0.65
+    5. Skip self-matches (same chunk ID already in DB)
+
+  For "km_saas_cac_payback_001" (if PMF and JTBD chunks already exist in DB):
+    related_ids: ["km_pmf_growth_metrics_001", "km_jtbd_retention_levers_001"]
+    relationship_notes: "km_pmf_growth_metrics_001 (score: 0.81, collection: knowledge); km_jtbd_retention_levers_001 (score: 0.68, collection: knowledge)"
+
+  First time you run the pipeline (empty DB): all related_ids=[], no connections.
+  Each subsequent ingest: connections grow as the knowledge base expands.
+
+─────────────────────────────────────────────────────────────────────────────
+AGENT 9: RELATIONSHIP TYPER
+─────────────────────────────────────────────────────────────────────────────
+
+File: agents/pipeline/nodes/relationship_typer.py → run_relationship_typer()
+
+  INPUT  (from state): connection_map (from Agent 8), raw_chunks
+  OUTPUT (to state):   relationship_map (List[RelationshipEntry])
+
+  ONE Gemini call. temperature=0.1 — classification should be precise.
+
+  The Connector (Agent 8) found WHO is related (by vector similarity score).
+  The Relationship Typer classifies HOW they relate (by reading both chunk texts).
+
+  For each (new chunk, related chunk) pair it fetches the actual text of the
+  related chunk from ChromaDB and asks Gemini: "What is the relationship type?"
+
+  Six types:
+    BUILDS_ON   — new chunk extends a claim directly made in the related chunk
+    EXTENDS     — new chunk generalizes or adds nuance to the related chunk
+    APPLIES     — new chunk is a concrete application of the related chunk's concept
+    CONTRADICTS — new chunk makes a claim that conflicts with the related chunk
+    PARALLELS   — both chunks address the same phenomenon from different angles
+    EXEMPLIFIES — new chunk is a specific example of the related chunk's abstract claim
+
+  For "km_saas_cac_payback_001" → "km_pmf_growth_metrics_001":
+    relationship_type = "PARALLELS"
+    (both address growth efficiency metrics, from different angles: CAC vs. PMF)
+
+  For "km_saas_burn_multiple_001" → "km_saas_cac_payback_001":
+    relationship_type = "EXTENDS"
+    (burn multiple extends CAC payback by adding the capital-efficiency dimension)
+
+  Stored in core chunk metadata as:
+    relationship_types = "PARALLELS:km_pmf_growth_metrics_001,EXTENDS:km_saas_cac_payback_001"
+
+─────────────────────────────────────────────────────────────────────────────
+AGENT 10: ASSEMBLER
+─────────────────────────────────────────────────────────────────────────────
+
+File: agents/pipeline/nodes/assembler.py → run_assembler()
+
+  INPUT  (from state): raw_chunks, enrichments (refined by Agent 6), critiques,
+                       connection_map, relationship_map, academic_analysis
+  OUTPUT (to state):   final_chunks (List[FinalChunk])
+
+  NO LLM CALL. Pure Python merge logic.
+
+  For EACH raw_chunk, produces TWO FinalChunks:
+
+  FinalChunk #1 — CORE (id = "km_saas_cac_payback_001"):
+    content = original chunk text
+              + "\n\n**Implications**\n- Short payback = reinvest faster (refined)...\n..."
+              + "\n\n**Use Cases**\n- Evaluating fundraise readiness\n..."
+              + "\n\n**Follow-up Questions**\n- How does blended CAC change payback?\n..."
+    metadata = { name, domain, chunk_type, your_analysis: "False",
+                 source: "ingestion_pipeline",
+                 related_ids:        "km_pmf_growth_metrics_001,km_jtbd_retention_levers_001",
+                 relationship_types: "PARALLELS:km_pmf_growth_metrics_001,EXTENDS:km_saas_burn_multiple_001" }
+
+  FinalChunk #2 — CRITIQUE (id = "km_saas_cac_payback_001_critique"):
+    collection = "knowledge"  ← same collection as parent
+    content    = "**Limitations**\n- The 12-month benchmark is calibrated for VC-funded SaaS...\n..."
+                 "\n\n**Biases**\n- Written from a US VC-funded SaaS lens...\n..."
+                 "\n\n**Stress Tests**\n- What if payback is 8 months but NRR is 70%?\n..."
+    metadata   = { name: "CAC Payback Period Mechanics — Critical Analysis",
+                   chunk_type: "critique", parent_id: "km_saas_cac_payback_001" }
+
+  PLUS, if academic_analysis is non-empty, ONE additional FinalChunk (per ingest):
+
+  FinalChunk — ACADEMIC CONTEXT (id = "ak_saas_unit_economics_academic_context"):
+    collection = "knowledge"  ← dominant collection from raw_chunks
+    content    = "**Key Claims**\n- Payback < 12 months correlates with strong unit economics\n..."
+                 "\n\n**Key Authors & Thinkers**\n- David Skok (SaaS metrics)\n..."
+                 "\n\n**Theories & Frameworks Referenced**\n- SaaS unit economics framework\n..."
+                 "\n\n**Research Approach**\nPractitioner synthesis drawing on public SaaS data\n..."
+    metadata   = { name: "SaaS unit economics — Academic Context",
+                   chunk_type: "academic_context", source: "ingestion_pipeline" }
+
+  Result: 5 raw_chunks → 11 final_chunks (5 core + 5 critique + 1 academic_context)
+
+─────────────────────────────────────────────────────────────────────────────
+AGENT 11: WRITER
+─────────────────────────────────────────────────────────────────────────────
+
+File: agents/pipeline/nodes/writer.py → run_writer()
+
+  INPUT  (from state): final_chunks
+  OUTPUT (to state):   write_log (List[Dict])
+
+  NO LLM CALL. Calls memory/store.py → upsert() for each FinalChunk.
+
+  Before each upsert, sanitizes metadata:
+    - bool  → str ("True"/"False") — ChromaDB rejects Python booleans
+    - list  → comma-joined string  — ChromaDB rejects lists
+    - None  → ""                   — ChromaDB rejects None
+
+  For "km_saas_cac_payback_001":
+    store.upsert(
+      collection_name = "knowledge",
+      text            = "CAC payback period is...\n\n**Implications**\n...",
+      metadata        = { "name": "CAC Payback...", "your_analysis": "False", "related_ids": "km_pmf_..." },
+      doc_id          = "km_saas_cac_payback_001"
+    )
+    → ChromaDB: embed text → store (content + vector + metadata) under this ID
+    → Safe to run twice: upsert updates in place, no duplicates
+
+  write_log after 11 successful writes:
+    [ { "id": "km_saas_cac_payback_001",               "collection": "knowledge", "status": "ok" },
+      { "id": "km_saas_cac_payback_001_critique",       "collection": "knowledge", "status": "ok" },
+      ... (8 more core + critique pairs) ...
+      { "id": "ak_saas_unit_economics_academic_context","collection": "knowledge", "status": "ok" } ]
+
+─────────────────────────────────────────────────────────────────────────────
+AGENT 12: SYNTHESIZER
+─────────────────────────────────────────────────────────────────────────────
+
+File: agents/pipeline/nodes/synthesizer.py → run_synthesizer()
+
+  INPUT  (from state): EVERYTHING — primary_topic, content_type, domains,
+                       raw_chunks, final_chunks, connection_map, relationship_map,
+                       academic_analysis, write_log
+  OUTPUT (to state):   summary (str) — shown in Teach tab results panel
+
+  ONE Gemini call. temperature=0.2 — natural language with factual grounding.
+  Structured output: SynthesizerOutput with single "summary" field.
+
+  For our SaaS article:
+    summary = "Added 5 foundational concepts on SaaS unit economics — covering
+               CAC payback, LTV:CAC benchmarks, NRR, the Magic Number, and Burn
+               Multiple — each with generated critical analysis of its limitations
+               and biases. Connected to 3 existing chunks in your knowledge base,
+               including earlier PMF and JTBD notes, building out your finance +
+               strategy knowledge web."
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 3 — Results returned to the UI
+─────────────────────────────────────────────────────────────────────────────
+
+File: agents/ingestion_agent.py → process() (return)
+      templates/index.html → renderIngestResults()
+
+  process() extracts from final state:
+    {
+      "summary":      "Added 5 foundational concepts on SaaS unit economics...",
+      "chunks":       [ {id, name, collection, domain, chunk_type, your_analysis} × 5 ],
+      "counts":       { "knowledge": 11 },    ← 5 core + 5 critique + 1 academic_context
+      "pipeline_log": [ {stage, status, summary, detail} × 12 ]
+    }
+
+  UI renders:
+    - Summary box: the Synthesizer's 2-3 sentence synthesis
+    - Count pills: "11 → knowledge"
+    - Chunk list: name, domain, chunk_type, ID for each raw_chunk (not critiques)
+    - "your analysis" tag on chunks marked as Sudheer's own writing
+    - Pipeline Trace section: collapsible rows for each of the 12 stages
+        ◈ classifier         ✓ done   "Content: article | Domains: finance, strategy | Topic: SaaS unit economics"
+        ⊟ context_loader     ✓ done   "Loaded 4 context chunks from existing knowledge base"
+        ⊞ chunker            ✓ done   "Produced 5 raw chunks (knowledge: 5)"
+        ⊕ enricher           ✓ done   "Enriched 5/5 chunks (draft — pending Critic review)"
+        ⊗ critic             ✓ done   "Generated critique for 5/5 chunks (35 critical points total)"
+        ⊘ enricher_refiner   ✓ done   "Refined enrichments for 5/5 chunks after Critic dialogue"
+        ⊚ academic_extractor ✓ done   "Extracted academic structure: 2 claims, 2 authors, 2 theories"
+        ⊙ connector          ✓ done   "Found 3 connections for 2/5 chunks"
+        ⊝ relationship_typer ✓ done   "Classified 3 relationships (PARALLELS: 1, EXTENDS: 2)"
+        ⊜ assembler          ✓ done   "Assembled 5 core + 5 critique + 1 academic_context = 11 total"
+        ⊛ writer             ✓ done   "Wrote 11/11 chunks to ChromaDB (knowledge: 11)"
+        ◉ synthesizer        ✓ done   "Generated synthesis summary"
+
+  Content and hint fields cleared automatically. Ready for the next paste.
+
+─────────────────────────────────────────────────────────────────────────────
+WHAT HAPPENS NEXT
+─────────────────────────────────────────────────────────────────────────────
+
+  All 11 chunks are immediately available.
+  Switch to the Chat tab:
+
+  "What is CAC payback?"
+    → search_knowledge("CAC payback") → retrieves km_saas_cac_payback_001
+    → Friday answers with the core concept + its implications
+
+  "What are the limitations of CAC payback as a metric?"
+    → search_knowledge("CAC payback limitations") → retrieves km_saas_cac_payback_001_critique
+    → Friday answers with the Critic's generated limitations and biases
+
+  "Given my PMF knowledge, how does unit economics connect?"
+    → search_knowledge("unit economics PMF connection") + get_profile()
+    → retrieves core chunks + related km_pmf_* chunks via the related_ids metadata
+    → Friday synthesizes across both topics
+
+  No restart needed. No re-indexing. Just paste and chat.
+
+─────────────────────────────────────────────────────────────────────────────
+TIMING (approximate)
+─────────────────────────────────────────────────────────────────────────────
+
+Chat:
+  Cold start (first request): ~10-15s (loads 80MB embedding model)
+  Warm requests: ~3-6s (1-2s per tool call + 2-4s Gemini generation)
+
+Teach (12-agent pipeline):
+  Cold start: ~15-20s (model load + first Gemini call)
+  Warm requests per agent:
+    Classifier:         ~1-2s  (single Gemini structured output)
+    Context Loader:     ~0.3s  (ChromaDB search across 3 collections, no Gemini)
+    Chunker:            ~2-4s  (Gemini, longer for dense content)
+    Enricher:           ~2-4s  (Gemini, single call for all chunks)
+    Critic:             ~2-4s  (Gemini, single call for all chunks)
+    Enricher Refiner:   ~2-4s  (Gemini, refines after Critic dialogue)
+    Academic Extractor: ~1-2s  (Gemini, runs on full text — skipped for framework_ref)
+    Connector:          ~0.5s  (embedding + ChromaDB search, no Gemini)
+    Relationship Typer: ~1-2s  (Gemini, classifies each connection pair)
+    Assembler:          ~0.1s  (pure Python)
+    Writer:             ~0.5s  (ChromaDB upserts, ~50ms each)
+    Synthesizer:        ~1-2s  (single Gemini structured output)
+  Total warm: ~15-28s for a 5-chunk article (11 stored chunks total)

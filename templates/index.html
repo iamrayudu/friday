@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Friday</title>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet"/>
+  <style>
+    :root {
+      --bg:         #0a0a0b;
+      --surface:    #111114;
+      --surface2:   #1a1a1f;
+      --border:     #222228;
+      --accent:     #e8ff47;
+      --accent-dim: rgba(232,255,71,0.09);
+      --text:       #e8e8ec;
+      --text-dim:   #6b6b78;
+      --text-muted: #3a3a44;
+      --friday:     #c8b8ff;
+      --friday-dim: rgba(200,184,255,0.08);
+      --success:    #4affa0;
+      --teach:      #ff9f47;
+      --teach-dim:  rgba(255,159,71,0.08);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── HEADER ──────────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 28px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .logo { display: flex; align-items: center; gap: 10px; }
+
+    .dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 10px var(--accent);
+      animation: pulse 2.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%,100% { opacity:1; box-shadow:0 0 10px var(--accent); }
+      50%      { opacity:.4; box-shadow:0 0 3px var(--accent); }
+    }
+
+    .logo-name {
+      font-family: 'Syne', sans-serif;
+      font-size: 17px; font-weight: 800;
+      color: var(--accent); letter-spacing: -0.3px;
+    }
+
+    .logo-sub {
+      font-size: 9px; color: var(--text-muted);
+      letter-spacing: 0.14em; text-transform: uppercase;
+    }
+
+    /* ── TAB BAR ─────────────────────────────────── */
+    .tabs {
+      display: flex; gap: 4px;
+    }
+
+    .tab-btn {
+      background: none;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: var(--text-muted);
+      font-family: 'DM Mono', monospace;
+      font-size: 10px; letter-spacing: 0.08em;
+      padding: 6px 14px;
+      cursor: pointer; transition: all 0.2s;
+      text-transform: uppercase;
+    }
+
+    .tab-btn:hover { color: var(--text-dim); }
+
+    .tab-btn.active.chat {
+      border-color: rgba(200,184,255,0.25);
+      color: var(--friday);
+      background: var(--friday-dim);
+    }
+
+    .tab-btn.active.teach {
+      border-color: rgba(255,159,71,0.25);
+      color: var(--teach);
+      background: var(--teach-dim);
+    }
+
+    .header-right {
+      display: flex; align-items: center; gap: 16px;
+    }
+
+    .gemini-badge {
+      font-size: 9px; color: var(--text-muted);
+      letter-spacing: 0.1em; text-transform: uppercase;
+      border: 1px solid var(--border);
+      border-radius: 4px; padding: 3px 8px;
+    }
+
+    .new-btn {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text-muted);
+      font-family: 'DM Mono', monospace;
+      font-size: 10px; padding: 5px 12px;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .new-btn:hover { border-color: var(--text-dim); color: var(--text-dim); }
+
+    /* ── WORKSPACE ───────────────────────────────── */
+    .workspace {
+      flex: 1;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Each tab pane fills the workspace */
+    .tab-pane {
+      display: none;
+      flex: 1;
+      overflow: hidden;
+    }
+    .tab-pane.active { display: flex; }
+
+    /* ── CHAT PANE ───────────────────────────────── */
+    #pane-chat {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+    }
+
+    /* Left: retrieval panel */
+    .left {
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+      background: var(--surface);
+    }
+
+    .panel-head {
+      padding: 16px 20px 12px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .panel-label {
+      font-family: 'Syne', sans-serif;
+      font-size: 9px; font-weight: 600;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .retrieval-body {
+      flex: 1; overflow-y: auto;
+      padding: 16px 20px;
+    }
+
+    .retrieval-body::-webkit-scrollbar { width: 3px; }
+    .retrieval-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    .ret-empty { font-size: 11px; color: var(--text-muted); line-height: 1.7; }
+
+    .col-block { margin-bottom: 16px; }
+
+    .col-head {
+      font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase;
+      margin-bottom: 5px;
+      display: flex; align-items: center; gap: 5px;
+    }
+    .col-head.knowledge  { color: #64b4ff; }
+    .col-head.frameworks { color: var(--friday); }
+    .col-head.personal   { color: var(--success); }
+
+    /* Right: chat area */
+    .right { display: flex; flex-direction: column; overflow: hidden; }
+
+    .messages {
+      flex: 1; overflow-y: auto;
+      padding: 28px 32px;
+      display: flex; flex-direction: column; gap: 22px;
+      scroll-behavior: smooth;
+    }
+    .messages::-webkit-scrollbar { width: 4px; }
+    .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    /* Welcome screen */
+    .welcome {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center; gap: 10px; padding: 40px;
+    }
+    .welcome-name {
+      font-family: 'Syne', sans-serif;
+      font-size: 36px; font-weight: 800;
+      color: var(--accent); letter-spacing: -1.5px;
+    }
+    .welcome-sub { font-size: 12px; color: var(--text-dim); line-height: 1.7; max-width: 340px; }
+    .chips { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; }
+    .chip {
+      padding: 9px 20px; background: var(--surface2);
+      border: 1px solid var(--border); border-radius: 20px;
+      color: var(--text-dim); font-size: 11px;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .chip:hover { border-color: var(--friday); color: var(--friday); background: var(--friday-dim); }
+
+    /* Message bubbles */
+    .msg {
+      display: flex; flex-direction: column;
+      max-width: 75%;
+      animation: fadeUp 0.25s ease forwards; opacity: 0;
+    }
+    @keyframes fadeUp {
+      from { opacity:0; transform:translateY(6px); }
+      to   { opacity:1; transform:translateY(0); }
+    }
+    .msg.user   { align-self: flex-end;  align-items: flex-end; }
+    .msg.friday { align-self: flex-start; align-items: flex-start; }
+    .msg-who {
+      font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 5px;
+    }
+    .msg.user   .msg-who { color: var(--text-muted); }
+    .msg.friday .msg-who { color: var(--friday); }
+    .msg-bubble {
+      padding: 12px 16px; border-radius: 12px;
+      font-size: 13px; line-height: 1.7; white-space: pre-wrap;
+    }
+    .msg.user .msg-bubble {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-bottom-right-radius: 3px;
+    }
+    .msg.friday .msg-bubble {
+      background: var(--friday-dim); border: 1px solid rgba(200,184,255,0.12);
+      border-bottom-left-radius: 3px;
+    }
+    .msg-time { font-size: 9px; color: var(--text-muted); margin-top: 4px; }
+
+    /* Typing indicator */
+    .typing-wrap {
+      display: flex; flex-direction: column;
+      align-self: flex-start; align-items: flex-start;
+      animation: fadeUp 0.25s ease forwards; opacity: 0;
+    }
+    .typing-who { font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--friday); margin-bottom: 5px; }
+    .typing {
+      display: flex; gap: 5px; padding: 12px 16px;
+      background: var(--friday-dim); border: 1px solid rgba(200,184,255,0.12);
+      border-radius: 12px; border-bottom-left-radius: 3px;
+    }
+    .t-dot {
+      width: 5px; height: 5px; border-radius: 50%;
+      background: var(--friday);
+      animation: bounce 1.2s ease-in-out infinite;
+    }
+    .t-dot:nth-child(2) { animation-delay: .2s; }
+    .t-dot:nth-child(3) { animation-delay: .4s; }
+    @keyframes bounce {
+      0%,60%,100% { transform:translateY(0); opacity:.4; }
+      30%          { transform:translateY(-5px); opacity:1; }
+    }
+
+    /* Input bar */
+    .input-bar {
+      padding: 16px 28px; border-top: 1px solid var(--border);
+      display: flex; gap: 10px; align-items: flex-end; flex-shrink: 0;
+    }
+    .input-wrap {
+      flex: 1; background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 11px 15px; transition: border-color 0.2s;
+    }
+    .input-wrap:focus-within { border-color: rgba(200,184,255,0.35); }
+    #msgInput {
+      width: 100%; background: none; border: none; outline: none;
+      color: var(--text); font-family: 'DM Mono', monospace;
+      font-size: 13px; line-height: 1.5; resize: none; max-height: 120px; overflow-y: auto;
+    }
+    #msgInput::placeholder { color: var(--text-muted); }
+
+    .send-btn {
+      width: 40px; height: 40px; flex-shrink: 0;
+      background: var(--accent); border: none; border-radius: 8px;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      transition: all 0.2s;
+    }
+    .send-btn:hover { box-shadow: 0 0 18px rgba(232,255,71,0.35); }
+    .send-btn:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
+    .send-btn svg { width: 16px; height: 16px; }
+
+    /* ── TEACH PANE ──────────────────────────────── */
+    #pane-teach {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+    }
+
+    /* Left: input area */
+    .teach-input {
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      padding: 28px 32px; gap: 16px;
+      overflow: hidden;
+    }
+
+    .teach-title {
+      font-family: 'Syne', sans-serif;
+      font-size: 13px; font-weight: 700;
+      color: var(--teach); letter-spacing: -0.2px;
+    }
+
+    .teach-desc {
+      font-size: 11px; color: var(--text-muted); line-height: 1.7;
+    }
+
+    .field-label {
+      font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase;
+      color: var(--text-muted); margin-bottom: 6px;
+    }
+
+    .content-area {
+      flex: 1;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 14px 16px;
+      transition: border-color 0.2s;
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .content-area:focus-within { border-color: rgba(255,159,71,0.3); }
+
+    #contentInput {
+      flex: 1; width: 100%; background: none; border: none; outline: none;
+      color: var(--text); font-family: 'DM Mono', monospace;
+      font-size: 12px; line-height: 1.7; resize: none;
+    }
+    #contentInput::placeholder { color: var(--text-muted); }
+
+    .hint-wrap {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 9px 14px;
+      transition: border-color 0.2s;
+    }
+    .hint-wrap:focus-within { border-color: rgba(255,159,71,0.3); }
+
+    #hintInput {
+      width: 100%; background: none; border: none; outline: none;
+      color: var(--text-dim); font-family: 'DM Mono', monospace;
+      font-size: 11px;
+    }
+    #hintInput::placeholder { color: var(--text-muted); }
+
+    .teach-btn {
+      width: 100%; padding: 12px;
+      background: var(--teach); border: none; border-radius: 8px;
+      color: #0a0a0b; font-family: 'DM Mono', monospace;
+      font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer; transition: all 0.2s; flex-shrink: 0;
+    }
+    .teach-btn:hover { box-shadow: 0 0 20px rgba(255,159,71,0.3); }
+    .teach-btn:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
+
+    /* Right: results area */
+    .teach-results {
+      display: flex; flex-direction: column; overflow: hidden;
+      background: var(--surface);
+    }
+
+    .results-head {
+      padding: 16px 24px 12px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .results-body {
+      flex: 1; overflow-y: auto;
+      padding: 20px 24px;
+    }
+    .results-body::-webkit-scrollbar { width: 3px; }
+    .results-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* Empty / processing / done states */
+    .res-empty {
+      font-size: 11px; color: var(--text-muted); line-height: 1.9;
+    }
+
+    .res-summary {
+      font-size: 12px; color: var(--text); line-height: 1.7;
+      background: var(--teach-dim); border: 1px solid rgba(255,159,71,0.15);
+      border-radius: 8px; padding: 12px 16px; margin-bottom: 20px;
+    }
+
+    .res-counts {
+      display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap;
+    }
+    .res-count-pill {
+      font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase;
+      padding: 4px 10px; border-radius: 12px;
+    }
+    .res-count-pill.knowledge  { background: rgba(100,180,255,0.1); color: #64b4ff; border: 1px solid rgba(100,180,255,0.2); }
+    .res-count-pill.frameworks { background: var(--friday-dim); color: var(--friday); border: 1px solid rgba(200,184,255,0.15); }
+    .res-count-pill.personal   { background: rgba(74,255,160,0.08); color: var(--success); border: 1px solid rgba(74,255,160,0.15); }
+
+    .res-collection-label {
+      font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase;
+      margin-bottom: 8px; margin-top: 16px;
+    }
+    .res-collection-label.knowledge  { color: #64b4ff; }
+    .res-collection-label.frameworks { color: var(--friday); }
+    .res-collection-label.personal   { color: var(--success); }
+
+    .chunk-row {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 8px 0; border-bottom: 1px solid var(--border);
+    }
+    .chunk-row:last-child { border-bottom: none; }
+
+    .chunk-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; margin-top: 5px; }
+    .chunk-dot.knowledge  { background: #64b4ff; }
+    .chunk-dot.frameworks { background: var(--friday); }
+    .chunk-dot.personal   { background: var(--success); }
+
+    .chunk-info { flex: 1; }
+    .chunk-name { font-size: 11px; color: var(--text); }
+    .chunk-meta { font-size: 9px; color: var(--text-muted); margin-top: 2px; }
+    .chunk-id   { font-size: 9px; color: var(--text-muted); opacity: 0.5; font-style: italic; }
+
+    .own-tag {
+      font-size: 8px; padding: 1px 6px; border-radius: 4px;
+      background: rgba(255,159,71,0.12); color: var(--teach);
+      border: 1px solid rgba(255,159,71,0.2); flex-shrink: 0;
+    }
+
+    /* Pipeline trace */
+    .pipeline-trace {
+      margin-top: 24px;
+      border-top: 1px solid var(--border);
+      padding-top: 16px;
+    }
+    .pipeline-trace-label {
+      font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase;
+      color: var(--text-muted); margin-bottom: 10px;
+    }
+    .pipeline-stage {
+      margin-bottom: 4px;
+    }
+    .pipeline-stage summary {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 10px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 6px; cursor: pointer; list-style: none;
+      transition: border-color 0.15s;
+      font-size: 10px;
+    }
+    .pipeline-stage summary::-webkit-details-marker { display: none; }
+    .pipeline-stage[open] summary { border-color: rgba(255,159,71,0.2); }
+    .pipeline-stage summary:hover { border-color: var(--text-muted); }
+    .ps-icon { font-size: 8px; }
+    .ps-name { letter-spacing: 0.08em; text-transform: uppercase; color: var(--teach); font-size: 9px; min-width: 80px; }
+    .ps-summary { flex: 1; color: var(--text-dim); }
+    .ps-status { font-size: 8px; padding: 1px 6px; border-radius: 4px; flex-shrink: 0; }
+    .ps-status.done    { background: rgba(74,255,160,0.1); color: var(--success); border: 1px solid rgba(74,255,160,0.2); }
+    .ps-status.partial { background: rgba(255,159,71,0.1); color: var(--teach); border: 1px solid rgba(255,159,71,0.2); }
+    .ps-status.error   { background: rgba(255,80,80,0.1); color: #ff6b6b; border: 1px solid rgba(255,80,80,0.2); }
+    .pipeline-detail {
+      padding: 8px 12px; margin-top: 4px;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 6px; font-size: 10px; color: var(--text-muted);
+      white-space: pre-wrap; overflow-x: auto; line-height: 1.6;
+    }
+
+    /* Processing animation */
+    .processing {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 14px; height: 200px;
+    }
+    .proc-dots { display: flex; gap: 6px; }
+    .proc-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--teach); opacity: 0.3;
+      animation: procPulse 1.4s ease-in-out infinite;
+    }
+    .proc-dot:nth-child(2) { animation-delay: .2s; }
+    .proc-dot:nth-child(3) { animation-delay: .4s; }
+    @keyframes procPulse {
+      0%,100% { opacity:.2; transform:scale(1); }
+      50%      { opacity:1; transform:scale(1.3); }
+    }
+    .proc-text { font-size: 11px; color: var(--text-muted); }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="logo">
+      <div class="dot"></div>
+      <div>
+        <div class="logo-name">FRIDAY</div>
+        <div class="logo-sub">your knowledge companion</div>
+      </div>
+    </div>
+
+    <!-- Tab switcher — centre of header -->
+    <div class="tabs">
+      <button class="tab-btn active chat" onclick="switchTab('chat')">Chat</button>
+      <button class="tab-btn teach"       onclick="switchTab('teach')">Teach Friday</button>
+    </div>
+
+    <div class="header-right">
+      <span class="gemini-badge">gemini-2.0-flash · free</span>
+      <button class="new-btn" id="newBtn" onclick="newSession()">New session</button>
+    </div>
+  </header>
+
+  <!-- ── CHAT PANE ─────────────────────────────────────────────────── -->
+  <div class="tab-pane active" id="pane-chat">
+
+    <!-- Left: agent tool calls -->
+    <div class="left">
+      <div class="panel-head">
+        <div class="panel-label">Agent tool calls</div>
+      </div>
+      <div class="retrieval-body">
+        <div class="ret-empty" id="retEmpty">
+          The tools Friday used to search ChromaDB will appear here after each message.
+        </div>
+        <div id="retResults" style="display:none"></div>
+      </div>
+    </div>
+
+    <!-- Right: chat -->
+    <div class="right">
+      <div class="messages" id="messages">
+        <div class="welcome" id="welcome">
+          <div class="welcome-name">Hey, Sudheer.</div>
+          <div class="welcome-sub">Ask me anything — I'll pull the right knowledge from your database and answer with context.</div>
+          <div class="chips">
+            <div class="chip" onclick="useChip(this)">How do I diagnose if a client needs sensemaking?</div>
+            <div class="chip" onclick="useChip(this)">When does JTBD break down as a framework?</div>
+            <div class="chip" onclick="useChip(this)">What's the difference between sensemaking and JTBD?</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="input-bar">
+        <div class="input-wrap">
+          <textarea id="msgInput" rows="1" placeholder="ask friday..."
+            onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+        </div>
+        <button class="send-btn" id="sendBtn" onclick="send()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#0a0a0b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="19" x2="12" y2="5"/>
+            <polyline points="5 12 12 5 19 12"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── TEACH PANE ─────────────────────────────────────────────────── -->
+  <div class="tab-pane" id="pane-teach">
+
+    <!-- Left: content input -->
+    <div class="teach-input">
+      <div>
+        <div class="teach-title">Teach Friday</div>
+        <div class="teach-desc" style="margin-top:6px">
+          Paste anything — an article, your notes, a case study, your analysis of something,
+          a tech concept, your experience from a role. Friday will structure it and store it
+          so it can use it in future conversations.
+        </div>
+      </div>
+
+      <div style="flex:1;display:flex;flex-direction:column;gap:4px;overflow:hidden;">
+        <div class="field-label">Content</div>
+        <div class="content-area">
+          <textarea id="contentInput" placeholder="Paste your content here...&#10;&#10;Can be: an article you read, your class notes, a framework you learned, your analysis of a problem, lessons from a past role, anything you want Friday to know."></textarea>
+        </div>
+      </div>
+
+      <div>
+        <div class="field-label">Hint <span style="opacity:0.4;font-size:8px">(optional — helps Friday classify it correctly)</span></div>
+        <div class="hint-wrap">
+          <input id="hintInput" type="text"
+            placeholder="e.g. 'this is my own analysis of unit economics for SaaS' or 'MBA operations class notes'"/>
+        </div>
+      </div>
+
+      <button class="teach-btn" id="teachBtn" onclick="teach()">
+        Teach Friday
+      </button>
+    </div>
+
+    <!-- Right: results -->
+    <div class="teach-results">
+      <div class="results-head">
+        <div class="panel-label">What was stored</div>
+      </div>
+      <div class="results-body" id="teachResults">
+        <div class="res-empty">
+          After you teach Friday something, you'll see exactly what chunks were stored,
+          which collection they went into, and what metadata was attached.<br/><br/>
+          <span style="opacity:0.5">knowledge — analytical depth<br/>
+          frameworks — reusable tools<br/>
+          personal — your background &amp; analysis</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // ── State ────────────────────────────────────────────────────────
+    let history  = [];
+    let busy     = false;
+    let teaching = false;
+    let activeTab = 'chat';
+
+    // ── Tab switching ─────────────────────────────────────────────────
+    function switchTab(tab) {
+      activeTab = tab;
+
+      // Show/hide panes
+      document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+      document.getElementById('pane-' + tab).classList.add('active');
+
+      // Update tab button styles
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      event.target.classList.add('active');
+
+      // Update "New session" button visibility — only makes sense in chat
+      const newBtn = document.getElementById('newBtn');
+      newBtn.style.display = tab === 'chat' ? '' : 'none';
+    }
+
+    // ── Chat functions ────────────────────────────────────────────────
+    function autoResize(el) {
+      el.style.height = 'auto';
+      el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+    }
+
+    function handleKey(e) {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    }
+
+    function now() {
+      return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    }
+
+    function addBubble(role, text) {
+      const w = document.getElementById('welcome');
+      if (w) w.remove();
+      const wrap = document.getElementById('messages');
+      const el = document.createElement('div');
+      el.className = `msg ${role}`;
+      el.innerHTML = `
+        <div class="msg-who">${role === 'user' ? 'Sudheer' : 'Friday'}</div>
+        <div class="msg-bubble">${esc(text)}</div>
+        <div class="msg-time">${now()}</div>
+      `;
+      wrap.appendChild(el);
+      wrap.scrollTop = wrap.scrollHeight;
+    }
+
+    function showTyping() {
+      const w = document.getElementById('welcome');
+      if (w) w.remove();
+      const wrap = document.getElementById('messages');
+      const el = document.createElement('div');
+      el.className = 'typing-wrap'; el.id = 'typing';
+      el.innerHTML = `
+        <div class="typing-who">Friday</div>
+        <div class="typing">
+          <div class="t-dot"></div><div class="t-dot"></div><div class="t-dot"></div>
+        </div>`;
+      wrap.appendChild(el);
+      wrap.scrollTop = wrap.scrollHeight;
+    }
+
+    function removeTyping() {
+      const t = document.getElementById('typing');
+      if (t) t.remove();
+    }
+
+    function renderToolCalls(toolCalls) {
+      document.getElementById('retEmpty').style.display   = 'none';
+      document.getElementById('retResults').style.display = 'block';
+
+      if (!toolCalls || toolCalls.length === 0) {
+        document.getElementById('retResults').innerHTML =
+          '<div class="ret-empty">No tools called — answered from context.</div>';
+        return;
+      }
+
+      const colorMap = {
+        search_knowledge:  'knowledge',
+        search_frameworks: 'frameworks',
+        get_profile:       'personal',
+      };
+
+      document.getElementById('retResults').innerHTML = toolCalls.map((tc, i) => {
+        const cls = colorMap[tc.tool] || 'knowledge';
+        return `
+          <div class="col-block">
+            <div class="col-head ${cls}">${i + 1}. ${esc(tc.tool)}</div>
+            <div style="padding:6px 0">
+              <span style="font-size:9px;color:var(--text-muted)">query: ${esc(tc.query)}</span><br/>
+              <span style="font-size:10px;color:var(--text-dim);line-height:1.5">${esc(tc.snippet)}</span>
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    async function send() {
+      if (busy) return;
+      const input = document.getElementById('msgInput');
+      const msg   = input.value.trim();
+      if (!msg) return;
+
+      input.value = ''; input.style.height = 'auto';
+      addBubble('user', msg);
+      busy = true;
+      document.getElementById('sendBtn').disabled = true;
+      showTyping();
+
+      try {
+        const res  = await fetch('/chat', {
+          method:  'POST',
+          headers: {'Content-Type': 'application/json'},
+          body:    JSON.stringify({message: msg, history})
+        });
+        const data = await res.json();
+        removeTyping();
+        if (data.error) {
+          addBubble('friday', 'Error: ' + data.error);
+        } else {
+          addBubble('friday', data.response);
+          history.push({role:'user',  content: msg});
+          history.push({role:'model', content: data.response});
+          if (history.length > 40) history = history.slice(-40);
+          renderToolCalls(data.tool_calls);
+        }
+      } catch(e) {
+        removeTyping();
+        addBubble('friday', 'Connection error — is the server running?');
+      } finally {
+        busy = false;
+        document.getElementById('sendBtn').disabled = false;
+      }
+    }
+
+    function useChip(el) {
+      const input = document.getElementById('msgInput');
+      input.value = el.textContent;
+      autoResize(input);
+      send();
+    }
+
+    function newSession() {
+      history = [];
+      document.getElementById('messages').innerHTML = `
+        <div class="welcome" id="welcome">
+          <div class="welcome-name">Hey, Sudheer.</div>
+          <div class="welcome-sub">Fresh session. Ask me anything.</div>
+          <div class="chips">
+            <div class="chip" onclick="useChip(this)">How do I diagnose if a client needs sensemaking?</div>
+            <div class="chip" onclick="useChip(this)">When does JTBD break down as a framework?</div>
+            <div class="chip" onclick="useChip(this)">What's the difference between sensemaking and JTBD?</div>
+          </div>
+        </div>`;
+      document.getElementById('retEmpty').style.display   = 'block';
+      document.getElementById('retResults').style.display = 'none';
+      document.getElementById('retEmpty').textContent = 'The tools Friday used to search ChromaDB will appear here after each message.';
+    }
+
+    // ── Teach functions ───────────────────────────────────────────────
+    async function teach() {
+      if (teaching) return;
+      const content = document.getElementById('contentInput').value.trim();
+      const hint    = document.getElementById('hintInput').value.trim();
+      if (!content) return;
+
+      teaching = true;
+      document.getElementById('teachBtn').disabled = true;
+
+      // Show processing state in results panel
+      document.getElementById('teachResults').innerHTML = `
+        <div class="processing">
+          <div class="proc-dots">
+            <div class="proc-dot"></div>
+            <div class="proc-dot"></div>
+            <div class="proc-dot"></div>
+          </div>
+          <div class="proc-text">Reading and structuring your content...</div>
+        </div>`;
+
+      try {
+        const res  = await fetch('/ingest', {
+          method:  'POST',
+          headers: {'Content-Type': 'application/json'},
+          body:    JSON.stringify({content, hint})
+        });
+        const data = await res.json();
+
+        if (data.error) {
+          document.getElementById('teachResults').innerHTML =
+            `<div class="res-empty" style="color:#ff6b6b">Error: ${esc(data.error)}</div>`;
+          return;
+        }
+
+        renderIngestResults(data);
+
+        // Clear the form after success
+        document.getElementById('contentInput').value = '';
+        document.getElementById('hintInput').value    = '';
+
+      } catch(e) {
+        document.getElementById('teachResults').innerHTML =
+          '<div class="res-empty" style="color:#ff6b6b">Connection error — is the server running?</div>';
+      } finally {
+        teaching = false;
+        document.getElementById('teachBtn').disabled = false;
+      }
+    }
+
+    function renderIngestResults(data) {
+      // Count pills
+      const countPills = Object.entries(data.counts)
+        .filter(([, n]) => n > 0)
+        .map(([col, n]) => `<div class="res-count-pill ${col}">${n} → ${col}</div>`)
+        .join('');
+
+      // Group chunks by collection
+      const groups = {};
+      for (const chunk of data.chunks) {
+        if (!groups[chunk.collection]) groups[chunk.collection] = [];
+        groups[chunk.collection].push(chunk);
+      }
+
+      const collectionOrder = ['knowledge', 'frameworks', 'personal'];
+      const chunkRows = collectionOrder
+        .filter(col => groups[col])
+        .map(col => {
+          const rows = groups[col].map(c => `
+            <div class="chunk-row">
+              <div class="chunk-dot ${col}"></div>
+              <div class="chunk-info">
+                <div class="chunk-name">${esc(c.name)}${c.your_analysis ? ' <span class="own-tag">your analysis</span>' : ''}</div>
+                <div class="chunk-meta">${esc(c.domain)} · ${esc(c.chunk_type)}</div>
+                <div class="chunk-id">${esc(c.id)}</div>
+              </div>
+            </div>`).join('');
+          return `<div class="res-collection-label ${col}">${col}</div>${rows}`;
+        }).join('');
+
+      // Pipeline trace (only if present — backward compatible)
+      let pipelineHtml = '';
+      if (data.pipeline_log && data.pipeline_log.length) {
+        const stageIcons = {
+          classifier:  '◈',
+          chunker:     '⊞',
+          enricher:    '⊕',
+          critic:      '⊗',
+          connector:   '⊙',
+          assembler:   '⊜',
+          writer:      '⊛',
+          synthesizer: '◉',
+        };
+
+        const stageRows = data.pipeline_log.map(entry => {
+          const icon    = stageIcons[entry.stage] || '•';
+          const detail  = entry.detail
+            ? `<div class="pipeline-detail">${esc(JSON.stringify(entry.detail, null, 2))}</div>`
+            : '';
+          return `
+            <details class="pipeline-stage">
+              <summary>
+                <span class="ps-icon">${icon}</span>
+                <span class="ps-name">${esc(entry.stage)}</span>
+                <span class="ps-summary">${esc(entry.summary)}</span>
+                <span class="ps-status ${esc(entry.status)}">${esc(entry.status)}</span>
+              </summary>
+              ${detail}
+            </details>`;
+        }).join('');
+
+        pipelineHtml = `
+          <div class="pipeline-trace">
+            <div class="pipeline-trace-label">Pipeline trace</div>
+            ${stageRows}
+          </div>`;
+      }
+
+      document.getElementById('teachResults').innerHTML = `
+        <div class="res-summary">${esc(data.summary)}</div>
+        <div class="res-counts">${countPills}</div>
+        ${chunkRows}
+        ${pipelineHtml}
+      `;
+    }
+
+    // ── Utility ────────────────────────────────────────────────────────
+    function esc(s) {
+      return String(s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+        .replace(/\n/g,'<br/>');
+    }
+  </script>
+
+</body>
+</html>

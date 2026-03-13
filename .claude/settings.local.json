@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(source venv/bin/activate)",
+      "Bash(python scripts/inspect_memory.py knowledge \"how is JTBD different from personas\")"
+    ]
+  }
+}

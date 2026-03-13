@@ -1,0 +1,407 @@
+FRIDAY — DATA STORAGE
+======================
+How knowledge gets in, how it's organized, and how it's retrieved.
+
+─────────────────────────────────────────────────────────────────────────────
+THE DATABASE: ChromaDB (local)
+─────────────────────────────────────────────────────────────────────────────
+
+Location on disk:  memory/db/chroma/
+
+ChromaDB is a local vector database. No cloud service, no external dependency.
+It stores three things per chunk:
+  1. The text content (what gets returned to the LLM when retrieved)
+  2. A 384-dimensional float vector (the semantic meaning of the text)
+  3. Metadata dict (name, domain, chunk_type, your_analysis, source, added_on, etc.)
+
+Internally it uses:
+  - SQLite file for text + metadata
+  - HNSW index file for fast approximate nearest-neighbor vector search
+
+The entire database can be backed up by copying memory/db/chroma/.
+It can be reset by deleting that folder and re-running the seed scripts.
+
+─────────────────────────────────────────────────────────────────────────────
+THE EMBEDDING MODEL: all-MiniLM-L6-v2
+─────────────────────────────────────────────────────────────────────────────
+
+Model: sentence-transformers/all-MiniLM-L6-v2
+Size: ~80MB (downloaded once, cached in ~/.cache/huggingface/)
+Output: 384-dimensional float vector
+Runs: entirely on-device, no API call
+
+What it does:
+  - Input: any text string
+  - Output: a 384-dim vector encoding the semantic meaning
+  - Semantically similar texts → vectors that are geometrically close
+  - Used at WRITE time (when content is stored) AND READ time (when queries are made)
+
+CRITICAL: The embedding model must be the same at write and read time.
+  If you change the model, ALL stored vectors become meaningless —
+  they live in a different mathematical space than the new model's outputs.
+  To switch models: delete the database and re-ingest everything.
+
+─────────────────────────────────────────────────────────────────────────────
+THE THREE ACTIVE COLLECTIONS
+─────────────────────────────────────────────────────────────────────────────
+
+ChromaDB organizes data into collections — independently searchable namespaces.
+Friday uses three active collections that grow over time:
+
+┌──────────────────┬─────────────────────────────────────────────────────────┐
+│ Collection       │ What goes in it                                         │
+├──────────────────┼─────────────────────────────────────────────────────────┤
+│ knowledge        │ Things LEARNED. Analytical depth on any topic.          │
+│                  │ MBA cases, tech concepts, finance, strategy, PM,        │
+│                  │ engineering patterns, principles, limitations,          │
+│                  │ comparisons, case breakdowns.                           │
+├──────────────────┼─────────────────────────────────────────────────────────┤
+│ frameworks       │ Tools USED. Step-by-step reusable methodologies.        │
+│                  │ MBA frameworks, PM tools, consulting methods,           │
+│                  │ engineering patterns, mental models, templates.         │
+├──────────────────┼─────────────────────────────────────────────────────────┤
+│ personal         │ WHO Sudheer is. Background, experience, own analysis.   │
+│                  │ Career history, tech role experience, lessons learned,  │
+│                  │ his own written analysis and opinions on topics.        │
+│                  │ your_analysis: true = his own writing (not sourced)     │
+└──────────────────┴─────────────────────────────────────────────────────────┘
+
+Three reserved collections (empty — for future phases):
+  episodes    — conversation events and check-ins (Phase 3)
+  insights    — behavioral patterns derived from episodes (Phase 4)
+  case_memory — MBA case history (Phase 4)
+
+─────────────────────────────────────────────────────────────────────────────
+HOW DATA GETS IN — TWO PATHS
+─────────────────────────────────────────────────────────────────────────────
+
+PATH 1: Teach Tab — 12-Agent Pipeline (primary — use this for all new content)
+───────────────────────────────────────────────────────────────────────────────
+
+UI: http://localhost:8000 → Teach Friday tab
+Code: agents/ingestion_agent.py → agents/pipeline/ → POST /ingest
+
+  You paste raw content + an optional hint.
+  A LangGraph pipeline of 12 specialist agents processes it sequentially.
+  Agents talk to each other — a 3-turn dialogue loop between Enricher, Critic,
+  and Enricher Refiner produces higher-quality enrichments than a single pass.
+
+  WHAT THE 12 AGENTS DO:
+
+    Agent 1 — Classifier:
+      Reads the raw content and determines:
+        content_type:   "article" | "notes" | "framework_ref" | etc.
+        domains:        ["finance", "strategy", ...] — up to 3
+        is_own_writing: True if written in first person (Sudheer's own analysis)
+        primary_topic:  one-sentence topic description
+        quality_signal: "high" | "medium" | "low"
+      This metadata calibrates all downstream agents.
+
+    Agent 2 — Context Loader (no LLM):
+      Queries ChromaDB BEFORE chunking to fetch what Friday already knows.
+        Query: "{primary_topic} {domains joined}"
+        Searches: knowledge, frameworks, personal collections
+        Keeps: top 4 per collection, score >= 0.50, content truncated to 400 chars
+      Result: context_chunks — visible to all downstream agents so they don't
+      generate redundant implications or miss connections to prior knowledge.
+
+    Agent 3 — Chunker:
+      Splits the content into standalone concept units.
+        One chunk = one idea (not one paragraph, not one section).
+        Each chunk must make complete sense without surrounding context.
+        A 1500-word article typically yields 4-6 raw_chunks.
+        Routes each chunk to a collection: knowledge | frameworks | personal
+        Assigns an ID: km_descriptor_001 / fw_descriptor_001 / pk_descriptor_001
+
+    Agent 4 — Enricher (DIALOGUE TURN 1):
+      For each chunk, proposes three depth layers (aware of context_chunks):
+        implications:        2-3 second-order consequences ("what follows from this?")
+        follow_up_questions: 2-3 specific research directions ("what to explore next?")
+        use_cases:           2-3 concrete application scenarios ("when would I use this?")
+      These are DRAFT enrichments — the Critic will challenge them next.
+
+    Agent 5 — Critic (DIALOGUE TURN 2):
+      Sees BOTH the raw chunks AND the Enricher's proposed enrichments.
+      For each chunk, generates:
+        limitations:  2-3 situations where the idea breaks down
+        biases:       2-3 source/selection/geographic/temporal biases
+        stress_tests: 2-3 edge cases or counterexamples
+      Also challenges weak or redundant claims in the Enricher's proposals.
+      These become SEPARATE "_critique" companion chunks (see below).
+
+    Agent 6 — Enricher Refiner (DIALOGUE TURN 3):
+      Reads the Critic's challenges and REWRITES the enrichments.
+      Overwrites state["enrichments"] with refined versions that incorporate
+      the Critic's pushback — stronger claims, acknowledged nuances.
+      These refined enrichments are what actually get stored in ChromaDB.
+
+    Agent 7 — Academic Extractor:
+      Runs on the FULL original text (not individual chunks).
+      Skipped for "framework_ref" content type.
+      Extracts academic structure from analytical content:
+        key_claims:          main empirical or theoretical assertions
+        key_authors:         researchers, practitioners, or thinkers cited
+        key_theories:        named frameworks, models, or schools of thought
+        research_approach:   how the knowledge was produced
+        debate_position:     where this sits in an ongoing intellectual debate
+        intellectual_context: broader academic/practitioner context
+      Produces ONE academic_context chunk per ingest (see TYPE C below).
+
+    Agent 8 — Connector (no LLM):
+      For each new chunk, searches existing ChromaDB via vector similarity:
+        embedding model: all-MiniLM-L6-v2 (same model used for storage)
+        threshold: only keeps connections with similarity score >= 0.65
+        searches: "knowledge" and "frameworks" collections (not "personal")
+      Finds what new knowledge connects to in the existing knowledge base.
+      Result stored as related_ids in the chunk's metadata.
+
+    Agent 9 — Relationship Typer:
+      For each (new chunk → related chunk) pair from the Connector:
+        Fetches the actual text of the related chunk from ChromaDB
+        Asks Gemini: "What is the relationship type?"
+      Six types: BUILDS_ON | EXTENDS | APPLIES | CONTRADICTS | PARALLELS | EXEMPLIFIES
+      Result stored as relationship_types = "BUILDS_ON:km_pmf_001,EXTENDS:km_jtbd_001"
+
+    Agent 10 — Assembler (no LLM):
+      Merges all agent outputs into FinalChunks ready for storage.
+      For EACH raw_chunk, produces TWO FinalChunks + ONE academic_context chunk:
+        Core chunk: original text + REFINED enrichment appended + relationship_types metadata
+        Critique chunk: critique text only, id = "{original_id}_critique", parent_id metadata
+      Plus ONE academic_context FinalChunk per ingest (if academic_analysis is non-empty).
+
+    Agent 11 — Writer (no LLM):
+      Upserts all FinalChunks into ChromaDB.
+      Sanitizes metadata: bool → str, list → comma string, None → ""
+        (ChromaDB requires all metadata values to be str/int/float)
+      Uses upsert() — safe to run twice (same IDs → update in place, no duplicates)
+
+    Agent 12 — Synthesizer:
+      Reads everything: topic, all chunk names, connections, relationship types, write counts.
+      Writes a 2-3 sentence summary shown in the Teach tab results panel.
+
+  WHAT ONE PASTE PRODUCES IN CHROMADB:
+    Input:   1 article (~1500 words)
+    Chunks:  ~5 raw concepts from Chunker
+    Stored:  ~11 FinalChunks — 5 core (enriched + relationship_types) + 5 critique + 1 academic_context
+    For each raw chunk stored:
+      km_saas_cac_payback_001          → core chunk with refined enrichment appended
+      km_saas_cac_payback_001_critique → standalone critique chunk
+    Plus one academic_context chunk per ingest:
+      ak_saas_unit_economics_academic_context → searchable academic structure
+
+  This path handles any content type:
+    - MBA articles and papers
+    - Your own class notes and analysis
+    - Tech documentation and concepts
+    - Personal experience ("what I learned from building X")
+    - Cross-domain insights
+
+PATH 2: Seed Scripts (legacy — initial database only)
+──────────────────────────────────────────────────────
+
+Files: scripts/populate.py, scripts/ingest_*.py
+
+  These were written before the pipeline existed.
+  They hardcode chunks as Python dicts and call memory/store.py → upsert() directly.
+  Used to build the initial knowledge base (JTBD, PMF, Sensemaking, 15 MBA frameworks).
+
+  These seed chunks are SINGLE chunks only — no critique companions, no enrichment
+  appended to content, no related_ids. They represent the pre-pipeline baseline.
+
+  You do NOT need to write new scripts for new content — use the Teach tab instead.
+  The scripts are kept for:
+    - Reference: showing what the initial seed data looks like
+    - Re-seeding: if you ever delete the database and start over
+
+─────────────────────────────────────────────────────────────────────────────
+WHAT EACH CHUNK LOOKS LIKE (metadata schema)
+─────────────────────────────────────────────────────────────────────────────
+
+THREE TYPES OF CHUNKS stored by the 12-agent pipeline:
+
+  TYPE A — CORE CHUNKS (one per concept from Chunker):
+    Content = original chunk text
+               + **Implications** section (from Enricher)
+               + **Use Cases** section (from Enricher)
+               + **Follow-up Questions** section (from Enricher)
+    Metadata fields:
+
+      id           (string)  — unique identifier
+                               Prefix: km_ (knowledge), fw_ (frameworks), pk_ (personal)
+                               Format: prefix_short_descriptor_001
+                               E.g. km_saas_cac_payback_001, fw_porters_001, pk_background_001
+
+      name         (string)  — human-readable name for this chunk
+                               E.g. "CAC Payback Period Mechanics"
+
+      domain       (string)  — topic area
+                               mba | tech | product | finance | strategy | marketing |
+                               operations | consulting | personal | engineering | general
+
+      chunk_type   (string)  — what kind of idea this is
+                               principle | framework | experience | analysis | limitation |
+                               comparison | application | case_study | mental_model | lesson | background
+
+      your_analysis (string) — "True" or "False"
+                               "True" = Sudheer's own writing/opinion
+                               "False" = sourced or learned knowledge
+                               (stored as string — ChromaDB rejects Python booleans)
+
+      source       (string)  — how it got in: "ingestion_pipeline" or seed script name
+
+      related_ids  (string)  — comma-separated IDs of existing chunks that relate to this one
+                               E.g. "km_pmf_growth_metrics_001,km_jtbd_retention_001"
+                               Empty string "" if no connections found (first ingest or empty DB)
+
+      relationship_types (string) — comma-separated type:id pairs from Relationship Typer
+                               E.g. "PARALLELS:km_pmf_growth_metrics_001,BUILDS_ON:km_jtbd_001"
+                               Types: BUILDS_ON | EXTENDS | APPLIES | CONTRADICTS | PARALLELS | EXEMPLIFIES
+                               Empty string "" if no connections (mirrors related_ids)
+
+  TYPE B — CRITIQUE COMPANION CHUNKS (one per core chunk from Critic + Assembler):
+    Content = **Limitations** section
+               + **Biases** section
+               + **Stress Tests** section
+    Metadata fields (subset of core, plus critique-specific):
+
+      id           (string)  — "{core_chunk_id}_critique"
+                               E.g. "km_saas_cac_payback_001_critique"
+
+      name         (string)  — "{core chunk name} — Critical Analysis"
+                               E.g. "CAC Payback Period Mechanics — Critical Analysis"
+
+      chunk_type   (string)  — always "critique" for these companion chunks
+
+      parent_id    (string)  — the ID of the core chunk this critique belongs to
+                               E.g. "km_saas_cac_payback_001"
+
+      collection   (string)  — SAME collection as the parent core chunk
+                               (if the core is in "knowledge", critique is also in "knowledge")
+
+  TYPE C — ACADEMIC CONTEXT CHUNKS (one per ingest if content has academic structure):
+    Content = **Key Claims** section
+               + **Key Authors & Thinkers** section
+               + **Theories & Frameworks Referenced** section
+               + **Research Approach** section
+               + **Debate Position** section
+               + **Intellectual Context** section
+    Metadata fields:
+
+      id           (string)  — "ak_{topic_slug}_academic_context"
+                               E.g. "ak_saas_unit_economics_academic_context"
+                               Prefix: ak_ (academic knowledge)
+
+      name         (string)  — "{primary_topic} — Academic Context"
+                               E.g. "SaaS unit economics — Academic Context"
+
+      chunk_type   (string)  — always "academic_context" for these chunks
+
+      collection   (string)  — dominant collection from raw_chunks
+                               (whichever of knowledge/frameworks/personal has the most chunks)
+
+      research_approach (string) — how the knowledge was produced (also in metadata for filtering)
+
+    Searchable by:
+      "what are the theoretical foundations of X?"
+      "who are the key thinkers behind X?"
+      "what debate does X sit in?"
+
+  Note: seed script chunks (added before the pipeline existed) only have TYPE A fields
+  without related_ids, relationship_types, or enrichment appended — they are the pre-pipeline baseline.
+
+─────────────────────────────────────────────────────────────────────────────
+HOW DATA IS READ — SIMILARITY SEARCH
+─────────────────────────────────────────────────────────────────────────────
+
+Files: memory/vector_store.py (LangChain wrapper)
+       tools/retrieval.py (@tool functions)
+
+Two files can read ChromaDB (they point to the same database):
+  memory/store.py         — raw ChromaDB client (used by ingest scripts)
+  memory/vector_store.py  — LangChain Chroma wrapper (used by retrieval tools)
+  No data duplication. Same database, different interfaces.
+
+When a retrieval tool is called:
+  1. The query string is embedded: all-MiniLM-L6-v2 → 384-dim vector
+  2. ChromaDB computes cosine distance to all stored vectors in the collection
+  3. Returns the N closest chunks (most semantically similar)
+  4. Distance is converted to relevance: relevance = 1 - distance
+  5. Chunks are formatted as text and returned to the LLM
+
+Relevance scores:
+  0.9+    = very high match
+  0.7-0.9 = strong match
+  0.5-0.7 = moderate match
+  <0.5    = weak, possibly irrelevant
+
+Per-tool k values (how many chunks each tool retrieves):
+  search_knowledge  → k=4 (returns top 4 knowledge chunks)
+  search_frameworks → k=3 (returns top 3 framework chunks)
+  get_profile       → k=2 (returns top 2 personal chunks)
+
+─────────────────────────────────────────────────────────────────────────────
+LAZY LOADING AND CACHING
+─────────────────────────────────────────────────────────────────────────────
+
+File: memory/vector_store.py
+
+The embedding model (80MB) and ChromaDB connections are expensive to load.
+Cached as module-level globals after first load:
+  _embeddings = None   → loaded once on first get_embeddings() call
+  _stores = {}         → dict of collection_name → Chroma object
+
+First request in a session: slow (~5-10s to load model + open DB connections)
+All subsequent requests: fast (uses cached objects, sub-second overhead)
+
+─────────────────────────────────────────────────────────────────────────────
+UPSERT: SAFE RE-TEACHING
+─────────────────────────────────────────────────────────────────────────────
+
+Both the Ingestion Agent and the seed scripts use upsert() from memory/store.py.
+
+upsert() = insert if the ID doesn't exist, UPDATE if it does.
+
+This means:
+  - Pasting the same content twice → same IDs → updates in place, no duplicates
+  - Re-running a seed script → same result as the first run
+  - Improving a note and re-teaching it → the updated version replaces the old one
+
+The ID is the key. The Ingestion Agent generates IDs from the content description,
+so the same piece of content should naturally produce the same IDs.
+
+─────────────────────────────────────────────────────────────────────────────
+WHAT IS NOT STORED YET
+─────────────────────────────────────────────────────────────────────────────
+
+Conversation history:
+  Not persisted. Lives only in the browser during a session.
+  When the browser tab closes, history is gone.
+  Phase 3 (Memory Agent) will auto-extract key moments → `episodes` collection.
+
+Derived insights:
+  The `insights` collection exists but is empty.
+  Phase 4: periodic Gemini call reads episodes and generates behavioral patterns.
+
+─────────────────────────────────────────────────────────────────────────────
+BACKUP AND RESET
+─────────────────────────────────────────────────────────────────────────────
+
+Backup:
+  Copy the folder: memory/db/chroma/
+  That's the entire database. Copy it anywhere to preserve it.
+
+Reset and re-seed from scratch:
+  1. Delete: memory/db/chroma/
+  2. Run seed scripts in order:
+       python scripts/populate.py                         # frameworks + personal placeholders
+       python scripts/ingest_jtbd.py                      # 14 JTBD knowledge chunks
+       python scripts/ingest_pmf_article.py               # 15 PMF knowledge chunks
+       python scripts/ingest_sensemaking_article.py       # 13 sensemaking knowledge chunks
+       python scripts/ingest_sensemaking_frameworks.py    # 3 sensemaking framework chunks
+  3. Re-add any content you taught via the Teach tab (no backup of that exists
+     unless you saved the original text separately)
+  4. Verify: python scripts/inspect_memory.py
+
+Inspect current state:
+  python scripts/inspect_memory.py
+  Shows collection names, chunk counts, and sample chunk IDs.

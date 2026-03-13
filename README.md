@@ -1,0 +1,2 @@
+# friday
+your personal agent
