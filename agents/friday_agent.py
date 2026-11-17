@@ -92,7 +92,7 @@ def _build_executor() -> AgentExecutor:
     - return_intermediate_steps: True = we get the tool call log for the UI
     """
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash",
+        model="gemini-2.5-flash",
         google_api_key=os.environ.get("GOOGLE_API_KEY"),
         temperature=0.3,
     )

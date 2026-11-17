@@ -18,7 +18,7 @@ def get_llm(temperature: float = 0.1) -> ChatGoogleGenerativeAI:
       0.2 — for synthesis (balanced)
     """
     return ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash",
+        model="gemini-2.5-flash",
         google_api_key=os.environ.get("GOOGLE_API_KEY"),
         temperature=temperature,
     )
